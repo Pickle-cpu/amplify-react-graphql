@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
 import "./App.css";
 import "@aws-amplify/ui-react/styles.css";
-import { API } from "aws-amplify";
+import { API, Storage } from "aws-amplify";
 import {
   Button,
   Flex,
   Heading,
+  Image,
   Text,
   TextField,
   View,
@@ -24,19 +25,40 @@ const App = ({ signOut }) => {
     fetchNotes();
   }, []);
 
+  // promise.all 等待所有的异步处理完
+  // 一般情况使用map足够 这里使用promiseall是因为
+  // 需要等待所有异步处理完才能继续后面的操作
   async function fetchNotes() {
     const apiData = await API.graphql({ query: listNotes });
     const notesFromAPI = apiData.data.listNotes.items;
+    await Promise.all(
+      notesFromAPI.map(async (note) => {
+        if (note.image) {
+          const url = await Storage.get(note.name);
+          note.image = url;
+        }
+        // 确保map()方法返回一个经过修改的笔记项对象
+        return note;
+      })
+    );
     setNotes(notesFromAPI);
   }
 
   async function createNote(event) {
+    // 防止form自己提交
     event.preventDefault();
+    // 方便化 获取form
     const form = new FormData(event.target);
+    const image = form.get("image");
     const data = {
       name: form.get("name"),
       description: form.get("description"),
+      // 只储存了对应image的名字
+      image: image.name,
     };
+    // 双感叹检查是否存在或者为真值
+    // 等待storage上传储存图片
+    if (!!data.image) await Storage.put(data.name, image);
     await API.graphql({
       query: createNoteMutation,
       variables: { input: data },
@@ -49,9 +71,13 @@ const App = ({ signOut }) => {
 
   // 解构note变成note的id 意思是要传一个包含id属性的对象
   // deleteAMutation A是model的名字
-  async function deleteNote({ id }) {
+  async function deleteNote({ id, name }) {
     const newNotes = notes.filter((note) => note.id !== id);
+    // 在删除笔记时 我们实际上已经拥有了需要的数据newNotes
+    // 因此可以直接使用setNotes(newNotes)来更新状态
+    // 而不需要再次发起请求
     setNotes(newNotes);
+    await Storage.remove(name);
     await API.graphql({
       query: deleteNoteMutation,
       variables: { input: { id } },
@@ -79,6 +105,13 @@ const App = ({ signOut }) => {
             variation="quiet"
             required
           />
+          {/* 接收用户选择的文件 */}
+          <View
+            name="image"
+            as="input"
+            type="file"
+            style={{ alignSelf: "end" }}
+          />
           <Button type="submit" variation="primary">
             Create Note
           </Button>
@@ -97,6 +130,18 @@ const App = ({ signOut }) => {
               {note.name}
             </Text>
             <Text as="span">{note.description}</Text>
+            {/* 一个条件渲染的部分 它会检查note.image是否存在
+            如果note.image存在则会渲染一个<Image>组件来显示该图片 */}
+            {/* JSX中我们不能使用常规的if语句 所以用三元 */}
+            {note.image && (
+              <Image
+                // 我储存到了storage里面了 所以后续
+                // 我想要访问这种图片 可以直接访问图片的名字
+                src={note.image}
+                alt={`visual aid for ${notes.name}`}
+                style={{ width: 400 }}
+              />
+            )}
             <Button variation="link" onClick={() => deleteNote(note)}>
               Delete note
             </Button>
